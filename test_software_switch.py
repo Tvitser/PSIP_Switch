@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from software_switch import SoftwareSwitch
 
@@ -82,6 +83,16 @@ class TestSoftwareSwitch(unittest.TestCase):
                 self.assertEqual(value, 0)
             for value in self.switch.stats[port].tx_pdus.values():
                 self.assertEqual(value, 0)
+
+    def test_available_interfaces_excludes_loopback(self) -> None:
+        with patch("software_switch.socket.if_nameindex", return_value=[(1, "lo"), (2, "eth0"), (3, "enp0s20f0u1")]):
+            self.assertEqual(SoftwareSwitch.available_interfaces(), ["enp0s20f0u1", "eth0"])
+
+    def test_start_physical_bridge_requires_two_distinct_interfaces(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Both interfaces are required"):
+            self.switch.start_physical_bridge("", "eth1")
+        with self.assertRaisesRegex(ValueError, "must be different"):
+            self.switch.start_physical_bridge("eth1", "eth1")
 
 
 if __name__ == "__main__":
