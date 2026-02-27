@@ -88,6 +88,10 @@ class TestSoftwareSwitch(unittest.TestCase):
         with patch("software_switch.socket.if_nameindex", return_value=[(1, "lo"), (2, "eth0"), (3, "enp0s20f0u1")]):
             self.assertEqual(SoftwareSwitch.available_interfaces(), ["enp0s20f0u1", "eth0"])
 
+    def test_available_interfaces_empty(self) -> None:
+        with patch("software_switch.socket.if_nameindex", return_value=[]):
+            self.assertEqual(SoftwareSwitch.available_interfaces(), [])
+
     def test_start_physical_bridge_requires_two_distinct_interfaces(self) -> None:
         with self.assertRaisesRegex(ValueError, "Both interfaces are required"):
             self.switch.start_physical_bridge("", "eth1")

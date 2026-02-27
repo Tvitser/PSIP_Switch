@@ -148,10 +148,12 @@ class SoftwareSwitch:
         return bridge_socket
 
     def _bridge_loop(self) -> None:
+        # PACKET_OUTGOING is 4 on Linux; fallback keeps behavior stable if the constant is absent.
         packet_outgoing = getattr(socket, "PACKET_OUTGOING", 4)
         socket_to_port = {bridge_socket: port for port, bridge_socket in self._bridge_sockets.items()}
+        sockets = list(socket_to_port)
         while not self._bridge_stop.is_set():
-            ready, _, _ = select(list(socket_to_port), [], [], 0.5)
+            ready, _, _ = select(sockets, [], [], 0.5)
             for in_socket in ready:
                 frame, address = in_socket.recvfrom(65535)
                 packet_type = address[2] if len(address) > 2 else None
@@ -171,16 +173,15 @@ class SoftwareSwitch:
         if port1_iface == port2_iface:
             raise ValueError("Interfaces for port 1 and port 2 must be different")
 
+        sockets: Dict[int, socket.socket] = {}
         try:
-            self._bridge_sockets = {
-                1: self._open_bridge_socket(port1_iface),
-                2: self._open_bridge_socket(port2_iface),
-            }
+            sockets[1] = self._open_bridge_socket(port1_iface)
+            sockets[2] = self._open_bridge_socket(port2_iface)
         except OSError:
-            for bridge_socket in self._bridge_sockets.values():
+            for bridge_socket in sockets.values():
                 bridge_socket.close()
-            self._bridge_sockets = {}
             raise
+        self._bridge_sockets = sockets
         self._bridge_ifaces = {1: port1_iface, 2: port2_iface}
         self._bridge_stop.clear()
         self._bridge_thread = Thread(target=self._bridge_loop, daemon=True)
