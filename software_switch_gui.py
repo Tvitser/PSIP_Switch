@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Lock
 from urllib.parse import parse_qs
 
 from software_switch import PROTOCOLS, SoftwareSwitch
@@ -20,6 +21,7 @@ def parse_hex_frame(raw: str) -> bytes:
 class SwitchGuiHandler(BaseHTTPRequestHandler):
     switch = SoftwareSwitch()
     last_result: str = ""
+    state_lock = Lock()
 
     def _write_html(self, html: str, status: int = 200) -> None:
         body = html.encode("utf-8")
@@ -30,20 +32,32 @@ class SwitchGuiHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _render(self) -> str:
-        rows_mac = "".join(
-            f"<tr><td>{escape(mac)}</td><td>{port}</td></tr>"
-            for mac, port in sorted(self.switch.mac_table.items())
-        )
+        with self.state_lock:
+            last_result = self.last_result
+            mac_table_items = list(sorted(self.switch.mac_table.items()))
+            stats_snapshot = {
+                port: {
+                    protocol: (
+                        self.switch.stats[port].rx_pdus[protocol],
+                        self.switch.stats[port].tx_pdus[protocol],
+                    )
+                    for protocol in PROTOCOLS
+                }
+                for port in (1, 2)
+            }
+
+        rows_mac = "".join(f"<tr><td>{escape(mac)}</td><td>{port}</td></tr>" for mac, port in mac_table_items)
         if not rows_mac:
             rows_mac = "<tr><td colspan='2'>empty</td></tr>"
 
         rows_stats = ""
         for port in (1, 2):
             for protocol in PROTOCOLS:
+                rx_value, tx_value = stats_snapshot[port][protocol]
                 rows_stats += (
                     f"<tr><td>{port}</td><td>{protocol}</td>"
-                    f"<td>{self.switch.stats[port].rx_pdus[protocol]}</td>"
-                    f"<td>{self.switch.stats[port].tx_pdus[protocol]}</td></tr>"
+                    f"<td>{rx_value}</td>"
+                    f"<td>{tx_value}</td></tr>"
                 )
 
         return f"""<!doctype html>
@@ -61,7 +75,7 @@ class SwitchGuiHandler(BaseHTTPRequestHandler):
 </head>
 <body>
   <h1>Software Switch (Lab 3 GUI)</h1>
-  <div class="msg">{escape(self.last_result)}</div>
+  <div class="msg">{escape(last_result)}</div>
   <h2>Process Frame</h2>
   <form method="post" action="/process">
     <label>Input port:</label>
@@ -100,22 +114,24 @@ class SwitchGuiHandler(BaseHTTPRequestHandler):
         form = parse_qs(payload)
 
         try:
-            if self.path == "/process":
-                in_port = int(form.get("in_port", ["1"])[0])
-                frame = parse_hex_frame(form.get("frame_hex", [""])[0])
-                result = self.switch.process_frame(in_port, frame)
-                self.last_result = (
-                    f"Frame processed: in={result['in_port']} out={result['out_port']} "
-                    f"src={result['src_mac']} dst={result['dst_mac']} protocols={','.join(result['protocols'])}"
-                )
-            elif self.path == "/reset":
-                self.switch.reset_statistics()
-                self.last_result = "Statistics reset."
-            else:
-                self._write_html("<h1>Not found</h1>", status=404)
-                return
-        except Exception as exc:  # noqa: BLE001
-            self.last_result = f"Error: {exc}"
+            with self.state_lock:
+                if self.path == "/process":
+                    in_port = int(form.get("in_port", ["1"])[0])
+                    frame = parse_hex_frame(form.get("frame_hex", [""])[0])
+                    result = self.switch.process_frame(in_port, frame)
+                    self.last_result = (
+                        f"Frame processed: in={result['in_port']} out={result['out_port']} "
+                        f"src={result['src_mac']} dst={result['dst_mac']} protocols={','.join(result['protocols'])}"
+                    )
+                elif self.path == "/reset":
+                    self.switch.reset_statistics()
+                    self.last_result = "Statistics reset."
+                else:
+                    self._write_html("<h1>Not found</h1>", status=404)
+                    return
+        except ValueError as exc:
+            with self.state_lock:
+                self.last_result = f"Error: {exc}"
 
         self.send_response(303)
         self.send_header("Location", "/")

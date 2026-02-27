@@ -8,7 +8,7 @@ Minimal Python prototype for the 3rd lab:
 ## Run non-terminal GUI
 
 ```bash
-python /home/runner/work/PSIP_Switch/PSIP_Switch/software_switch_gui.py
+python software_switch_gui.py
 ```
 
 Then open:

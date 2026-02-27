@@ -12,6 +12,10 @@ class TestSoftwareSwitchGuiHelpers(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_hex_frame("001")
 
+    def test_parse_hex_frame_rejects_invalid_hex(self) -> None:
+        with self.assertRaisesRegex(ValueError, "^Frame hex string contains invalid hexadecimal characters$"):
+            parse_hex_frame("gg")
+
 
 if __name__ == "__main__":
     unittest.main()
