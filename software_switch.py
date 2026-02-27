@@ -8,6 +8,8 @@ from typing import Dict
 
 
 PROTOCOLS = ("ethernet_ii", "arp", "ip", "tcp", "udp", "icmp", "http")
+BRIDGE_SELECT_TIMEOUT_SECONDS = 0.5
+BRIDGE_THREAD_JOIN_TIMEOUT_SECONDS = 1.5
 
 
 @dataclass
@@ -148,12 +150,14 @@ class SoftwareSwitch:
         return bridge_socket
 
     def _bridge_loop(self) -> None:
-        # PACKET_OUTGOING is 4 on Linux; fallback keeps behavior stable if the constant is absent.
+        # PACKET_OUTGOING is Linux AF_PACKET outgoing-packet type 4.
+        # Outgoing frames are filtered to avoid re-processing traffic the bridge just sent.
+        # Use fallback for Python builds where socket.PACKET_OUTGOING is unavailable.
         packet_outgoing = getattr(socket, "PACKET_OUTGOING", 4)
         socket_to_port = {bridge_socket: port for port, bridge_socket in self._bridge_sockets.items()}
         sockets = list(socket_to_port)
         while not self._bridge_stop.is_set():
-            ready, _, _ = select(sockets, [], [], 0.5)
+            ready, _, _ = select(sockets, [], [], BRIDGE_SELECT_TIMEOUT_SECONDS)
             for in_socket in ready:
                 frame, address = in_socket.recvfrom(65535)
                 packet_type = address[2] if len(address) > 2 else None
@@ -191,7 +195,7 @@ class SoftwareSwitch:
     def stop_physical_bridge(self) -> None:
         self._bridge_stop.set()
         if self._bridge_thread is not None:
-            self._bridge_thread.join(timeout=1.5)
+            self._bridge_thread.join(timeout=BRIDGE_THREAD_JOIN_TIMEOUT_SECONDS)
             self._bridge_thread = None
         for bridge_socket in self._bridge_sockets.values():
             bridge_socket.close()

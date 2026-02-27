@@ -158,7 +158,7 @@ class SwitchGuiHandler(BaseHTTPRequestHandler):
                 else:
                     self._write_html("<h1>Not found</h1>", status=404)
                     return
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             with self.state_lock:
                 self.last_result = f"Error: {exc}"
 
