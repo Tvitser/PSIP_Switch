@@ -91,9 +91,7 @@ class SoftwareSwitch:
         dst_mac = self._mac(frame[0:6])
         src_mac = self._mac(frame[6:12])
         out_port = self.mac_table.get(dst_mac)
-        if out_port == in_port:
-            out_port = 2 if in_port == 1 else 1
-        if out_port not in (1, 2):
+        if out_port == in_port or out_port not in (1, 2):
             out_port = 2 if in_port == 1 else 1
 
         self.mac_table[src_mac] = in_port
