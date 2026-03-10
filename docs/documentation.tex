@@ -1,0 +1,919 @@
+% =============================================================================
+%  Software Switch – Project Documentation
+%  PSIP Semester Project  |  2025/2026
+% =============================================================================
+\documentclass[12pt,a4paper]{article}
+
+% --- Encoding & language ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+
+% --- Page layout ---
+\usepackage[top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm]{geometry}
+
+% --- Typography ---
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{parskip}
+\setlength{\parindent}{0pt}
+
+% --- Math & symbols ---
+\usepackage{amsmath}
+
+% --- Tables ---
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+
+% --- Graphics & colours ---
+\usepackage{graphicx}
+\usepackage{xcolor}
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{linkblue}{RGB}{0,70,160}
+
+% --- TikZ diagrams ---
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, shapes.multipart,
+                decorations.pathreplacing, fit, backgrounds, calc}
+\tikzset{
+  box/.style    = {rectangle, draw, rounded corners=3pt,
+                   minimum width=2.8cm, minimum height=0.9cm,
+                   align=center, font=\small},
+  wbox/.style   = {box, fill=white},
+  bluebox/.style= {box, fill=blue!10, draw=blue!50},
+  greenbox/.style={box, fill=green!10, draw=green!50!black},
+  redbox/.style = {box, fill=red!8, draw=red!50},
+  graybox/.style= {box, fill=gray!10, draw=gray!50},
+  arr/.style    = {-{Stealth[length=5pt]}, thick},
+  darr/.style   = {{Stealth[length=5pt]}-{Stealth[length=5pt]}, thick},
+  note/.style   = {font=\footnotesize\itshape, text=gray},
+}
+
+% --- Source-code listings ---
+\usepackage{listings}
+\lstset{
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  framerule=0.4pt,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  keywordstyle=\color{blue!70!black}\bfseries,
+  commentstyle=\color{green!50!black},
+  stringstyle=\color{red!60!black},
+  captionpos=b,
+  aboveskip=6pt,
+  belowskip=6pt,
+}
+\lstdefinelanguage{CSharp}{
+  morekeywords={public,private,sealed,class,void,new,return,var,string,bool,
+                int,byte,using,namespace,static,readonly,override,null,if,else,
+                foreach,try,catch,throw,ref,async,await,Task,lock,out,true,false},
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+}
+\lstdefinelanguage{Python3}{
+  morekeywords={def,class,return,if,else,elif,for,while,import,from,with,
+                as,True,False,None,in,not,and,or,raise,pass,yield,lambda},
+  morecomment=[l]{\#},
+  morestring=[b]",
+  morestring=[b]',
+}
+
+% --- Hyperlinks ---
+\usepackage[colorlinks=true, linkcolor=linkblue, urlcolor=linkblue,
+            citecolor=linkblue, pdfborder={0 0 0}]{hyperref}
+
+% --- Headers / footers ---
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small Software Switch – Project Documentation}
+\rhead{\small PSIP 2025/2026}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% --- Caption styling ---
+\usepackage{caption}
+\captionsetup{font=small, labelfont=bf}
+
+% --- Utilities ---
+\usepackage{enumitem}
+\usepackage{float}
+
+% =============================================================================
+\begin{document}
+% =============================================================================
+
+% ------------- Title page ----------------------------------------------------
+\begin{titlepage}
+  \centering
+  \vspace*{2cm}
+  {\LARGE\bfseries Software Switch\par}
+  \vspace{0.5em}
+  {\large Project Documentation\par}
+  \vspace{3cm}
+  {\large PSIP Semester Project\par}
+  \vspace{0.5em}
+  {\normalsize 2025/2026\par}
+  \vfill
+  {\small
+    \textit{Note on AI tool usage:}
+    Parts of the source code (Python and C\# implementations) were generated and
+    refined with the assistance of GitHub Copilot (an AI coding assistant).
+    All generated content was reviewed and verified by the authors.
+    Sections marked \textbf{[AI-assisted]} in the source repository indicate
+    code produced with this tool.\par
+  }
+\end{titlepage}
+
+% ------------- Table of contents ---------------------------------------------
+\tableofcontents
+\clearpage
+
+% =============================================================================
+\section{Introduction}
+% =============================================================================
+
+This document describes the design and implementation of a two-port
+\textbf{software Ethernet switch} prototype developed as part of the PSIP
+semester project.  Two independent implementations are provided:
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Python prototype} – \texttt{software\_switch.py} +
+        \texttt{software\_switch\_gui.py}
+  \item \textbf{C\# prototype} – \texttt{csharp/SoftwareSwitch/}
+\end{itemize}
+
+Both implementations share the same conceptual design: they operate at
+\emph{OSI Layer 2} (Data Link layer), learn source MAC addresses, forward
+Ethernet~II frames to the correct output port, and track per-port traffic
+statistics.
+
+\subsection{Scope}
+
+The following functionality is covered in this document:
+
+\begin{enumerate}[noitemsep]
+  \item Frame reception, processing, and forwarding (Section~\ref{sec:forwarding})
+  \item MAC address table management (Section~\ref{sec:mac})
+  \item Traffic filtering design (Section~\ref{sec:filtering})
+  \item Traffic statistics (Section~\ref{sec:stats})
+  \item Cable disconnection and replacement handling
+        (Section~\ref{sec:cable})
+\end{enumerate}
+
+% =============================================================================
+\section{System Architecture}
+% =============================================================================
+
+\subsection{Component overview}
+
+Figure~\ref{fig:arch} shows the layered architecture shared by both
+implementations.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=1.2cm and 0.4cm]
+
+  % --- physical layer ---
+  \node[bluebox, minimum width=3.2cm] (nic1) {NIC / Port 1};
+  \node[bluebox, minimum width=3.2cm, right=3.0cm of nic1] (nic2) {NIC / Port 2};
+
+  % --- capture layer ---
+  \node[graybox, minimum width=8cm, above=0.9cm of nic1.north east,
+        anchor=south] (pcap) {Capture Layer (SharpPcap / AF\_PACKET socket)};
+
+  % --- core ---
+  \node[greenbox, minimum width=8cm, above=0.9cm of pcap] (core) {Switch Core (MAC learning + frame forwarding)};
+
+  % --- stats ---
+  \node[graybox, minimum width=3.8cm, above=0.9cm of core.north west,
+        anchor=south west] (stats) {Port Statistics};
+
+  % --- mac table ---
+  \node[graybox, minimum width=3.8cm, above=0.9cm of core.north east,
+        anchor=south east] (mactbl) {MAC Table + TTL Expiry};
+
+  % --- gui ---
+  \node[bluebox, minimum width=8cm, above=0.9cm of mactbl.north west,
+        anchor=south, yshift=-0.15cm] (gui)
+        {Web GUI (HttpListener / http.server)};
+
+  % arrows
+  \draw[darr] (nic1.north) -- ++(0,0.58);
+  \draw[darr] (nic2.north) -- ++(0,0.58);
+  \draw[arr] (pcap)  -- (core);
+  \draw[arr] (core.north west) -- (stats.south west|-core.north west)
+                                  -- (stats.south west);
+  \draw[arr] (core.north east) -- (mactbl.south east|-core.north east)
+                                  -- (mactbl.south east);
+  \draw[arr] (stats.north) |- (gui.west);
+  \draw[arr] (mactbl.north) |- (gui.east);
+
+\end{tikzpicture}
+\caption{High-level component diagram of the software switch.}
+\label{fig:arch}
+\end{figure}
+
+\subsection{Thread/task model}
+
+\begin{description}[noitemsep]
+  \item[Capture threads] (one per port) – SharpPcap dispatches
+    \texttt{OnPacketArrival} callbacks from internal per-device threads.
+    In the Python prototype, a single \texttt{select()} loop on two raw sockets
+    fulfils the same role.
+  \item[Expiry task] – A background \texttt{async Task} (C\#) or daemon
+    \texttt{Thread} (Python) wakes every 5~seconds and removes MAC table
+    entries whose age exceeds the configured TTL.
+  \item[Web server thread] – The \texttt{HttpListener} / \texttt{http.server}
+    thread handles HTTP requests from the administrator's browser.
+\end{description}
+
+All access to the shared MAC table and statistics is serialised through a
+single \texttt{lock} (C\#) / \texttt{threading.Lock} (Python) so that
+concurrent callbacks from the two capture threads do not corrupt state.
+
+% =============================================================================
+\section{Frame Reception, Processing, and Forwarding}
+\label{sec:forwarding}
+% =============================================================================
+
+\subsection{Ethernet II frame structure}
+
+The implementation operates exclusively on \emph{Ethernet II} frames
+(IEEE~802.3 with EtherType $\geq$ 0x0600).  The minimum on-wire structure
+is:
+
+\begin{center}
+\begin{tikzpicture}
+  \def\h{0.65}
+  \def\y{0}
+  % boxes
+  \draw[fill=blue!10] (0,\y) rectangle (2.4,\h)
+        node[midway,align=center,font=\scriptsize\bfseries] {DST MAC\\(6 B)};
+  \draw[fill=blue!10] (2.4,\y) rectangle (4.8,\h)
+        node[midway,align=center,font=\scriptsize\bfseries] {SRC MAC\\(6 B)};
+  \draw[fill=green!10] (4.8,\y) rectangle (6.4,\h)
+        node[midway,align=center,font=\scriptsize\bfseries] {EtherType\\(2 B)};
+  \draw[fill=gray!10] (6.4,\y) rectangle (10.4,\h)
+        node[midway,font=\scriptsize] {Payload  (46–1500 B)};
+  \draw[fill=red!8] (10.4,\y) rectangle (12.0,\h)
+        node[midway,align=center,font=\scriptsize\bfseries] {FCS\\(4 B)};
+  % byte offsets
+  \foreach \x/\lbl in {0/0, 2.4/6, 4.8/12, 6.4/14, 10.4/1514, 12.0/1518}
+    \node[font=\tiny,below=2pt] at (\x,\y) {\lbl};
+\end{tikzpicture}
+\end{center}
+
+The switch reads bytes~0–5 as the \textbf{destination MAC} and bytes~6–11 as
+the \textbf{source MAC}.  The EtherType field (bytes~12–13) is used for
+upper-layer protocol detection (Section~\ref{sec:detection}).
+
+\subsection{Reception and forwarding logic}
+
+Figure~\ref{fig:fwd} shows the step-by-step processing of every incoming
+frame.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.7cm,
+    decision/.style={diamond, draw, fill=yellow!15, aspect=2,
+                     text centered, font=\small,
+                     inner sep=2pt, minimum width=3.2cm}]
+
+  \node[bluebox]  (recv)  {Frame received on port $P_{in}$};
+  \node[redbox,   below=of recv]  (short) {Discard (too short)};
+  \node[decision, below=0.9cm of recv] (len)  {len $\geq$ 14 B?};
+  \node[greenbox, below=of len]   (parse) {Parse DST/SRC MAC};
+  \node[decision, below=0.9cm of parse] (known) {DST MAC in table?};
+  \node[graybox,  below right=0.9cm and 1.6cm of known]
+        (flood)  {$P_{out}$ = opposite port\\(unknown destination)};
+  \node[decision, below left=0.9cm and 1.6cm of known]
+        (sameport){$P_{out} = P_{in}$?};
+  \node[graybox, below=0.9cm of sameport]
+        (uselearned){$P_{out}$ = learned port};
+  \node[graybox, below right=0.9cm and 1.0cm of sameport]
+        (flip)   {$P_{out}$ = opposite port\\(same-port guard)};
+  \node[greenbox, below=4.0cm of parse, xshift=2.5cm]
+        (learn)  {Update / add SRC MAC};
+  \node[greenbox, below=0.6cm of learn]  (stats)  {Update statistics};
+  \node[bluebox,  below=0.6cm of stats]  (send)   {Send frame on $P_{out}$};
+
+  % arrows
+  \draw[arr] (recv)  -- (len);
+  \draw[arr] (len)   -- node[right,font=\tiny]{yes} (parse);
+  \draw[arr] (len)   -| node[above,font=\tiny]{no} (short);
+  \draw[arr] (parse) -- (known);
+  \draw[arr] (known) -- node[above,font=\tiny]{no}  (flood);
+  \draw[arr] (known) -- node[above,font=\tiny]{yes} (sameport);
+  \draw[arr] (sameport) -- node[left,font=\tiny]{no} (uselearned);
+  \draw[arr] (sameport) -- node[above,font=\tiny]{yes} (flip);
+  \draw[arr] (uselearned) |- (learn);
+  \draw[arr] (flip)       |- (learn);
+  \draw[arr] (flood)      |- (learn);
+  \draw[arr] (learn) -- (stats);
+  \draw[arr] (stats) -- (send);
+\end{tikzpicture}
+\caption{Frame forwarding decision flow.}
+\label{fig:fwd}
+\end{figure}
+
+\subsubsection{Key design decisions}
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Unknown destination} – If the destination MAC is not in the
+    table the frame is flooded to the \emph{opposite} port.  This is the
+    correct switch behaviour for unicast unknown destinations.
+  \item \textbf{Same-port guard} – If the MAC table would route the frame
+    back to the port it arrived on (e.g.\ after a topology change), the
+    frame is sent to the opposite port instead.  This prevents the frame
+    from being immediately discarded by the sending station.
+  \item \textbf{Promiscuous mode} – Both pcap devices are opened with
+    \texttt{DeviceModes.Promiscuous} so frames destined for any MAC address
+    are captured, not just those addressed to the switch interface itself.
+  \item \textbf{NoCaptureLocal} – The \texttt{NoCaptureLocal} flag (where
+    supported by the OS) prevents the capture device from seeing frames
+    that were injected by the bridge itself, eliminating forwarding loops
+    without requiring a separate outgoing-frame filter.
+\end{enumerate}
+
+\subsection{Protocol detection}
+\label{sec:detection}
+
+After identifying the destination and source MAC addresses, the switch
+inspects the EtherType and higher-layer headers to classify the frame.
+Table~\ref{tab:protos} lists all recognised protocols.
+
+\begin{table}[H]
+\centering
+\caption{Protocol detection logic.}
+\label{tab:protos}
+\begin{tabularx}{\linewidth}{llX}
+\toprule
+\textbf{Protocol} & \textbf{Detection condition} & \textbf{Notes} \\
+\midrule
+Ethernet II & always & Base layer; every frame counts. \\
+ARP  & EtherType = 0x0806 & Address Resolution Protocol. \\
+IP   & EtherType = 0x0800, frame $\geq$ 34~B & IPv4 only. \\
+ICMP & IP proto = 1 & Echo (ping) traffic. \\
+TCP  & IP proto = 6, frame $\geq$ 14+IHL+20~B & \\
+HTTP & TCP, port 80, payload starts with
+       \texttt{GET}/\texttt{POST}/\texttt{PUT}/\texttt{DELETE}/
+       \texttt{HEAD} or \texttt{HTTP/} & Plaintext HTTP only. \\
+UDP  & IP proto = 17 & \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The detection is hierarchical: a TCP frame is also counted as IP and
+Ethernet~II; an HTTP frame is also counted as TCP, IP, and Ethernet~II.
+
+\subsubsection{C\# implementation excerpt}
+
+\begin{lstlisting}[language=CSharp, caption={Protocol detection (Switch.cs).}]
+ushort ethertype = (ushort)((frame[12] << 8) | frame[13]);
+if (ethertype == 0x0806) { found.Add("arp"); return found; }
+if (ethertype != 0x0800 || frame.Length < 34) return found;
+found.Add("ip");
+byte proto = frame[23];
+if (proto == 1) { found.Add("icmp"); return found; }
+if (proto == 6 && frame.Length >= l4Start + 20) {
+    found.Add("tcp");
+    // ... HTTP detection on port 80 ...
+    return found;
+}
+if (proto == 17) found.Add("udp");
+\end{lstlisting}
+
+% =============================================================================
+\section{MAC Address Table Management}
+\label{sec:mac}
+% =============================================================================
+
+\subsection{Data structure}
+
+The MAC table is an in-memory dictionary keyed on the 17-character
+colon-separated MAC string (e.g.\ \texttt{aa:bb:cc:dd:ee:ff}).  Each entry
+stores:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Meaning}\\
+\midrule
+\texttt{Port}     & \texttt{int}      & Switch port (1 or 2) where the host was last seen.\\
+\texttt{LastSeen} & \texttt{DateTime} & UTC timestamp of the last received frame from this MAC.\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Adding an entry (MAC learning)}
+
+Every time a frame is processed, the \emph{source} MAC is examined:
+
+\begin{itemize}[noitemsep]
+  \item If the MAC is \textbf{not} present, a new entry is created with the
+    current port and timestamp.
+  \item If the MAC \textbf{is} present (possibly on a different port after a
+    cable swap), the existing entry's port and timestamp are updated in place.
+\end{itemize}
+
+No explicit "add" API is exposed; learning is a side-effect of frame
+forwarding.
+
+\subsection{Removing an entry (TTL expiry)}
+
+Each entry has a configurable time-to-live (default: \textbf{300~s}).
+A background task checks all entries every 5~seconds and removes those
+whose age exceeds the TTL:
+
+\begin{lstlisting}[language=CSharp, caption={MAC expiry background task (Switch.cs).}]
+private async Task ExpiryLoopAsync()
+{
+    while (!_cts.Token.IsCancellationRequested)
+    {
+        await Task.Delay(ExpiryCheckIntervalMs, _cts.Token);
+        PurgeExpiredEntries();
+    }
+}
+
+public void PurgeExpiredEntries()
+{
+    lock (_lock)
+    {
+        var expired = _macTable
+            .Where(kv => kv.Value.IsExpired(MacTtlSeconds))
+            .Select(kv => kv.Key).ToList();
+        foreach (var mac in expired)
+            _macTable.Remove(mac);
+    }
+}
+\end{lstlisting}
+
+Entries can also be cleared immediately via the \texttt{ClearMacTable()} method
+(exposed as the ``Clear MAC table'' button in the web GUI).
+
+\subsection{Updating an entry (cable replacement / port migration)}
+\label{sec:mac_update}
+
+When a host is moved from one port to another (e.g.\ a cable is swapped), the
+next frame it sends will carry the same source MAC but arrive on a different
+port.  The switch updates the existing entry atomically:
+
+\begin{lstlisting}[language=CSharp, caption={In-place MAC entry update.}]
+if (_macTable.TryGetValue(srcMac, out var existing))
+{
+    existing.Port = inPort;       // update port
+    existing.LastSeen = DateTime.UtcNow; // reset TTL
+}
+else
+{
+    _macTable[srcMac] = new MacEntry(inPort);
+}
+\end{lstlisting}
+
+This ensures the switch converges \emph{immediately} after a cable swap: the
+very next frame from the migrated host corrects the table entry, and subsequent
+frames are forwarded to the new port without any flooding.
+
+\subsection{Manual TTL configuration}
+
+The administrator can change the MAC TTL at runtime (via the web GUI or the
+\texttt{SetMacTtl()} API) without restarting the switch.  The new value is
+applied at the next expiry check; already-expired entries are removed in the
+following sweep.
+
+% =============================================================================
+\section{Traffic Filtering}
+\label{sec:filtering}
+% =============================================================================
+
+\subsection{Current state}
+
+The prototype does not yet implement a configurable filter mechanism.  All
+frames that pass the length check ($\geq$~14~bytes) are forwarded.
+
+\subsection{Proposed filter architecture}
+
+A minimal filter subsystem can be added as a pipeline stage between frame
+reception and the forwarding decision (Figure~\ref{fig:filter}).
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.9cm]
+  \node[bluebox]   (recv)   {Receive frame};
+  \node[graybox,   below=of recv]  (acl)    {ACL / Filter engine};
+  \node[redbox,    right=2cm of acl] (drop) {Drop + log};
+  \node[greenbox,  below=of acl]   (fwd)    {Forward};
+
+  \draw[arr] (recv) -- (acl);
+  \draw[arr] (acl)  -- node[above,font=\tiny]{deny} (drop);
+  \draw[arr] (acl)  -- node[right,font=\tiny]{permit} (fwd);
+\end{tikzpicture}
+\caption{Proposed filter pipeline.}
+\label{fig:filter}
+\end{figure}
+
+\subsubsection{Filter rule model}
+
+Each rule would be evaluated in priority order and would specify:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Field}      & \textbf{Example}          & \textbf{Notes} \\
+\midrule
+Priority            & 10, 20, \ldots            & Lower = higher priority. \\
+Match: src MAC      & \texttt{aa:bb:cc:dd:ee:ff} or wildcard & \\
+Match: dst MAC      & broadcast, multicast group & \\
+Match: EtherType    & 0x0800 (IP), 0x0806 (ARP) & \\
+Match: input port   & 1, 2, any                 & \\
+Action              & permit / deny             & Default action: permit. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Implementation sketch}
+
+\begin{lstlisting}[language=CSharp, caption={Proposed filter interface.}]
+public interface IFrameFilter
+{
+    /// <summary>Returns true if the frame should be forwarded.</summary>
+    bool ShouldForward(int inPort, byte[] frame);
+}
+
+public sealed class AclFilter : IFrameFilter
+{
+    private readonly IReadOnlyList<AclRule> _rules;
+    public bool ShouldForward(int inPort, byte[] frame)
+    {
+        foreach (var rule in _rules)
+            if (rule.Matches(inPort, frame))
+                return rule.Action == AclAction.Permit;
+        return true; // default permit
+    }
+}
+\end{lstlisting}
+
+The \texttt{Switch.ProcessFrame} method would call
+\texttt{filter.ShouldForward()} before the forwarding decision and discard
+the frame (without updating statistics) when the result is \texttt{false}.
+
+\subsubsection{Layer-3 / Layer-4 filtering}
+
+Because the prototype already classifies frames into Ethernet~II, ARP, IP,
+TCP, UDP, ICMP, and HTTP (see Section~\ref{sec:detection}), a more
+fine-grained L3/L4 filter could inspect:
+
+\begin{itemize}[noitemsep]
+  \item IPv4 source/destination addresses (bytes 26–29 and 30–33 of the frame)
+  \item TCP/UDP port numbers (bytes 34–35 and 36–37)
+  \item ICMP type (byte 34)
+\end{itemize}
+
+This is analogous to an \emph{extended ACL} in Cisco IOS terminology.
+
+% =============================================================================
+\section{Traffic Statistics}
+\label{sec:stats}
+% =============================================================================
+
+\subsection{Counters maintained}
+
+The switch maintains \emph{per-port} statistics for both the RX (receive) and
+TX (transmit) directions.  For each of the two ports, the following counters
+are tracked:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Counter}     & \textbf{Direction} & \textbf{Description} \\
+\midrule
+\texttt{RxFrames}    & RX  & Total Ethernet frames received. \\
+\texttt{TxFrames}    & TX  & Total Ethernet frames transmitted. \\
+\texttt{RxPdus[p]}   & RX  & PDUs per protocol $p$ received. \\
+\texttt{TxPdus[p]}   & TX  & PDUs per protocol $p$ transmitted. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+where $p \in \{$\texttt{ethernet\_ii}, \texttt{arp}, \texttt{ip},
+\texttt{tcp}, \texttt{udp}, \texttt{icmp}, \texttt{http}$\}$.
+
+\subsection{Update logic}
+
+Statistics are updated \emph{atomically with the forwarding decision} inside
+the same \texttt{lock} block to prevent races:
+
+\begin{lstlisting}[language=CSharp, caption={Statistics update (Switch.cs).}]
+var protocols = DetectProtocols(frame);
+_stats[inPort].IncrementRx(protocols);   // RX on the arriving port
+_stats[outPort].IncrementTx(protocols);  // TX on the forwarding port
+\end{lstlisting}
+
+\begin{itemize}[noitemsep]
+  \item A frame arriving on port~1 and forwarded to port~2 increments
+    \emph{port~1 RX} and \emph{port~2 TX} counters.
+  \item The same hierarchical counting applies to protocol PDUs:
+    an HTTP frame increments
+    \texttt{RxPdus["http"]}, \texttt{RxPdus["tcp"]},
+    \texttt{RxPdus["ip"]}, and \texttt{RxPdus["ethernet\_ii"]}
+    simultaneously.
+\end{itemize}
+
+\subsection{Web GUI display}
+
+The statistics table visible in the web GUI is rendered as a matrix of
+(port, protocol, RX, TX) rows.  A \textbf{Reset statistics} button calls
+\texttt{ResetStatistics()} which zeroes all counters under the lock.
+
+Figure~\ref{fig:stats_flow} summarises where and when statistics are updated
+relative to the forwarding pipeline.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.7cm]
+  \node[bluebox]   (rx)     {Frame on $P_{in}$};
+  \node[greenbox,  below=of rx]  (detect) {Detect protocols};
+  \node[graybox,   below=of detect] (rxctr)  {Increment $P_{in}$.RxFrames\\+ RxPdus[*]};
+  \node[greenbox,  below=of rxctr]  (fwd)    {Forwarding decision};
+  \node[graybox,   below=of fwd]    (txctr)  {Increment $P_{out}$.TxFrames\\+ TxPdus[*]};
+  \node[bluebox,   below=of txctr]  (send)   {Send on $P_{out}$};
+
+  \draw[arr] (rx) -- (detect);
+  \draw[arr] (detect) -- (rxctr);
+  \draw[arr] (rxctr) -- (fwd);
+  \draw[arr] (fwd) -- (txctr);
+  \draw[arr] (txctr) -- (send);
+\end{tikzpicture}
+\caption{Statistics update points in the forwarding pipeline.}
+\label{fig:stats_flow}
+\end{figure}
+
+% =============================================================================
+\section{Cable Disconnection and Replacement}
+\label{sec:cable}
+% =============================================================================
+
+\subsection{Cable removal – detection and handling}
+
+Because the software switch operates as a \emph{passive} bridge (it only
+processes frames it receives), it does not issue any probes and therefore
+cannot detect a link-down event on its own.
+
+\subsubsection{Scenario: cable pulled on port $N$}
+
+\begin{enumerate}[noitemsep]
+  \item No more frames arrive on port $N$.
+  \item All MAC table entries last seen on port $N$ remain valid until
+    their TTL expires (default: 300~s).
+  \item During the TTL window, the switch may still attempt to forward
+    frames \emph{to} port $N$; those packets will be silently discarded
+    by the OS because the interface is link-down.
+  \item After the TTL, entries are purged and the switch treats the hosts
+    as unknown, flooding subsequent frames.
+\end{enumerate}
+
+\subsubsection{Improvement: link-state monitoring}
+
+A production-grade enhancement would listen for
+\texttt{RTM\_NEWLINK} / \texttt{RTM\_DELLINK} netlink events (Linux) or
+network change notifications (\texttt{NetworkChange.NetworkAvailabilityChanged}
+on Windows/.NET) and immediately flush MAC table entries associated with the
+affected port when a link-down event occurs.
+
+This can be sketched as:
+
+\begin{lstlisting}[language=CSharp, caption={Proposed link-down handler.}]
+NetworkChange.NetworkAddressChanged += (_, _) =>
+{
+    foreach (var iface in NetworkInterface.GetAllNetworkInterfaces())
+    {
+        if (iface.OperationalStatus == OperationalStatus.Down)
+        {
+            int port = GetPortForInterface(iface.Name);
+            if (port != 0)
+                _switch.FlushEntriesForPort(port); // new API
+        }
+    }
+};
+\end{lstlisting}
+
+\subsection{Cable replacement (port migration)}
+
+When a host is physically moved from one port to another (or a cable is
+swapped between switches), the source MAC address of the first frame arriving
+on the new port triggers an \emph{in-place update} as described in
+Section~\ref{sec:mac_update}.  The switch converges immediately—within one
+frame—without any manual intervention.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.6cm and 2.5cm]
+  % Timeline
+  \node[font=\small\bfseries] (t0) {$t_0$: Host A on Port 1};
+  \node[below=of t0,font=\small] (t1) {MAC table: A $\to$ Port 1};
+  \node[below=of t1,font=\small\bfseries] (t2) {$t_1$: Cable moved to Port 2};
+  \node[below=of t2,font=\small] (t3) {Next frame from A arrives on Port 2};
+  \node[below=of t3,font=\small] (t4) {MAC table: A $\to$ Port 2 (updated)};
+  \node[below=of t4,font=\small\bfseries] (t5) {$t_2$: Switch converged};
+
+  \draw[arr] (t0) -- (t1);
+  \draw[arr,dashed] (t1) -- (t2);
+  \draw[arr] (t2) -- (t3);
+  \draw[arr] (t3) -- (t4);
+  \draw[arr] (t4) -- (t5);
+\end{tikzpicture}
+\caption{Convergence timeline after a cable swap.}
+\label{fig:cable}
+\end{figure}
+
+\subsection{Summary of edge cases}
+
+\begin{center}
+\begin{tabular}{p{4.2cm}p{4.8cm}p{4.8cm}}
+\toprule
+\textbf{Event} & \textbf{Current behaviour} & \textbf{Recommended improvement} \\
+\midrule
+Cable pulled (link down) &
+  Stale entries survive until TTL; frames forwarded to dead port dropped silently. &
+  Flush entries for that port on link-down event. \\
+Cable re-inserted, same host &
+  TTL refreshed on first frame; entry stays valid. &
+  No action needed. \\
+Host moved to other port &
+  Entry updated on first frame from new port. &
+  No action needed (already correct). \\
+Both cables pulled &
+  All entries expire after TTL; bridge idles. &
+  Optionally raise an alarm / log a warning. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% =============================================================================
+\section{Web GUI}
+% =============================================================================
+
+The web GUI is a single-page HTTP application served by
+\texttt{HttpListener} (C\#) or Python's built-in \texttt{http.server}.
+It provides the following controls:
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Physical bridge} – Start/Stop the raw-socket bridge on two
+    selected network interfaces.
+  \item \textbf{Process Frame} – Submit a hex-encoded Ethernet frame manually
+    (useful for testing without physical interfaces).
+  \item \textbf{MAC table} – Displays all current entries with their remaining
+    lifetime (seconds); allows setting the TTL and clearing the table.
+  \item \textbf{Protocol statistics} – Per-port, per-protocol RX/TX PDU
+    counters; Reset button.
+\end{itemize}
+
+% =============================================================================
+\section{Testing}
+% =============================================================================
+
+\subsection{Python tests}
+
+18~unit tests covering MAC learning, TTL expiry, protocol detection,
+statistics, and the GUI helper methods.  Run with:
+
+\begin{lstlisting}[language=bash, numbers=none]
+python -m unittest -v
+\end{lstlisting}
+
+\subsection{C\# tests}
+
+26~xUnit tests covering \texttt{MacEntry}, \texttt{PortStatistics},
+\texttt{Switch}, and \texttt{WebGui.ParseHexFrame}.  Run with:
+
+\begin{lstlisting}[language=bash, numbers=none]
+dotnet test csharp/SoftwareSwitch.Tests
+\end{lstlisting}
+
+% =============================================================================
+\section{Optional Extensions: Syslog, CDP, RESTCONF}
+% =============================================================================
+
+The following protocols are \emph{not} implemented in the current prototype
+but are briefly analysed as potential extensions.
+
+\subsection{Syslog (RFC 5424)}
+
+Syslog \cite{rfc5424} provides a standard mechanism for logging system
+messages.  The switch could emit Syslog messages (UDP port 514 or TCP port
+6514) for events such as:
+
+\begin{itemize}[noitemsep]
+  \item New MAC learned (Severity: Info)
+  \item MAC migrated to new port (Severity: Notice)
+  \item MAC entry expired (Severity: Debug)
+  \item Frame discarded by filter (Severity: Warning)
+  \item Link-down detected (Severity: Critical)
+\end{itemize}
+
+A Syslog message has the structure:
+\texttt{<PRIORITY>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA MSG}.
+
+\subsection{CDP – Cisco Discovery Protocol}
+
+CDP \cite{cdp} is a proprietary Cisco Layer-2 protocol transmitted as
+multicast frames to \texttt{01:00:0c:cc:cc:cc} every 60~seconds.  A CDP
+frame encapsulates TLV (Type-Length-Value) records advertising:
+device ID, software version, platform, port ID, and capabilities.
+
+Analysis of a PCAP sample from the Wireshark Wiki reveals:
+\begin{itemize}[noitemsep]
+  \item EtherType / SNAP OUI: \texttt{0x2000} (HDLC) over
+        \texttt{LLC} with DSAP/SSAP = 0xAA/0xAA (SNAP)
+  \item Checksum: simple 16-bit one's-complement over the CDP header
+  \item A software switch could passively log CDP advertisements to
+        discover connected Cisco devices without implementing the full protocol.
+\end{itemize}
+
+\subsection{RESTCONF (RFC 8040)}
+
+RESTCONF \cite{rfc8040} is a REST-based protocol for managing YANG-modelled
+network devices over HTTP/HTTPS.  An implementation would expose a
+YANG data model of the switch's MAC table and statistics as REST resources:
+
+\begin{itemize}[noitemsep]
+  \item \texttt{GET /restconf/data/switch:mac-table} – retrieve all entries
+  \item \texttt{DELETE /restconf/data/switch:mac-table} – clear the table
+  \item \texttt{GET /restconf/data/switch:statistics} – retrieve counters
+\end{itemize}
+
+The current \texttt{WebGui} HTTP API is a lightweight analogue of RESTCONF
+(without the YANG schema); a formal RESTCONF interface would require
+integration with a YANG library (e.g.\ \texttt{pyang} for Python or
+\texttt{YangExplorer} for .NET).
+
+% =============================================================================
+\section*{Conclusion}
+\addcontentsline{toc}{section}{Conclusion}
+% =============================================================================
+
+The prototype demonstrates the core functionality of an Ethernet Layer-2
+switch: MAC learning, unicast forwarding, unknown-destination flooding,
+protocol-aware statistics, and time-based MAC table expiry.  The C\#
+implementation additionally uses SharpPcap for cross-platform raw packet
+capture, replacing the earlier Linux-only P/Invoke approach.
+
+Key open items for a production-grade implementation include:
+\begin{itemize}[noitemsep]
+  \item Link-state monitoring and immediate MAC flush on link-down.
+  \item Configurable ACL-based traffic filtering.
+  \item Syslog integration for event logging.
+  \item RESTCONF/YANG API for programmatic management.
+\end{itemize}
+
+% =============================================================================
+%  References
+% =============================================================================
+\begin{thebibliography}{9}
+
+\bibitem{rfc5424}
+R.~Gerhards,
+\textit{The Syslog Protocol},
+RFC~5424, IETF, March 2009.
+\url{https://www.rfc-editor.org/rfc/rfc5424}
+
+\bibitem{rfc8040}
+A.~Bierman, M.~Bjorklund, K.~Watsen,
+\textit{RESTCONF Protocol},
+RFC~8040, IETF, January 2017.
+\url{https://www.rfc-editor.org/rfc/rfc8040}
+
+\bibitem{cdp}
+Cisco Systems,
+\textit{Cisco Discovery Protocol},
+Cisco IOS documentation.
+\url{https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/cdp/configuration/15-mt/cdp-15-mt-book.html}
+
+\bibitem{ieee8023}
+IEEE,
+\textit{IEEE Standard for Ethernet},
+IEEE~802.3, 2022.
+\url{https://standards.ieee.org/ieee/802.3/10236/}
+
+\bibitem{sharppcap}
+C.~Morgan et al.,
+\textit{SharpPcap – A Packet Capture Framework for .NET},
+GitHub, 2024.
+\url{https://github.com/dotpcap/sharppcap}
+
+\bibitem{wireshark}
+Wireshark Foundation,
+\textit{Wireshark Wiki – Sample Captures},
+\url{https://wiki.wireshark.org/SampleCaptures}
+
+\end{thebibliography}
+
+\end{document}
