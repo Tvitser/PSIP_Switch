@@ -34,7 +34,8 @@ class SwitchGuiHandler(BaseHTTPRequestHandler):
     def _render(self) -> str:
         with self.state_lock:
             last_result = self.last_result
-            mac_table_items = list(sorted(self.switch.mac_table.items()))
+            mac_table_snapshot = self.switch.mac_table_snapshot()
+            mac_ttl = self.switch.mac_ttl
             bridge_running = self.switch.bridge_running
             bridge_interfaces = self.switch.bridge_interfaces
             stats_snapshot = {
@@ -54,9 +55,12 @@ class SwitchGuiHandler(BaseHTTPRequestHandler):
         if not interface_options:
             interface_options = "<option value=''>No interfaces found</option>"
 
-        rows_mac = "".join(f"<tr><td>{escape(mac)}</td><td>{port}</td></tr>" for mac, port in mac_table_items)
+        rows_mac = "".join(
+            f"<tr><td>{escape(mac)}</td><td>{port}</td><td>{lifetime:.0f}</td></tr>"
+            for mac, port, lifetime in mac_table_snapshot
+        )
         if not rows_mac:
-            rows_mac = "<tr><td colspan='2'>empty</td></tr>"
+            rows_mac = "<tr><td colspan='3'>empty</td></tr>"
 
         rows_stats = ""
         for port in (1, 2):
@@ -109,8 +113,18 @@ class SwitchGuiHandler(BaseHTTPRequestHandler):
   </form>
 
   <h2>MAC table</h2>
+  <p>TTL: {mac_ttl} s &nbsp;
+    <form method="post" action="/mac/set_ttl" style="display:inline">
+      <input type="number" name="ttl" min="1" max="86400" value="{mac_ttl}" style="width:70px" />
+      <button type="submit">Set TTL</button>
+    </form>
+    &nbsp;
+    <form method="post" action="/mac/clear" style="display:inline">
+      <button type="submit">Clear MAC table</button>
+    </form>
+  </p>
   <table>
-    <tr><th>MAC address</th><th>Port</th></tr>
+    <tr><th>MAC address</th><th>Port</th><th>Lifetime (s)</th></tr>
     {rows_mac}
   </table>
 
@@ -155,6 +169,13 @@ class SwitchGuiHandler(BaseHTTPRequestHandler):
                 elif self.path == "/bridge/stop":
                     self.switch.stop_physical_bridge()
                     self.last_result = "Bridge stopped."
+                elif self.path == "/mac/clear":
+                    self.switch.clear_mac_table()
+                    self.last_result = "MAC table cleared."
+                elif self.path == "/mac/set_ttl":
+                    ttl = int(form.get("ttl", ["300"])[0])
+                    self.switch.set_mac_ttl(ttl)
+                    self.last_result = f"MAC TTL set to {ttl} s."
                 else:
                     self._write_html("<h1>Not found</h1>", status=404)
                     return

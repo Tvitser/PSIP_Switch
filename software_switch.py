@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 from select import select
 import socket
 from threading import Event, Lock, Thread
@@ -10,6 +11,23 @@ from typing import Dict
 PROTOCOLS = ("ethernet_ii", "arp", "ip", "tcp", "udp", "icmp", "http")
 BRIDGE_SELECT_TIMEOUT_SECONDS = 0.5
 BRIDGE_THREAD_JOIN_TIMEOUT_SECONDS = 1.5
+MAC_DEFAULT_TTL_SECONDS = 300
+MAC_EXPIRY_CHECK_INTERVAL_SECONDS = 5
+
+
+@dataclass
+class MacEntry:
+    port: int
+    last_seen: float = field(default_factory=time.monotonic)
+
+    def age_seconds(self) -> float:
+        return time.monotonic() - self.last_seen
+
+    def lifetime_remaining(self, ttl: int) -> float:
+        return max(0.0, ttl - self.age_seconds())
+
+    def is_expired(self, ttl: int) -> bool:
+        return self.age_seconds() >= ttl
 
 
 @dataclass
@@ -32,16 +50,31 @@ class SoftwareSwitch:
 
     It accepts Ethernet II frames, learns source MAC addresses, and forwards
     frames to the opposite port (or to the learned destination port).
+    MAC table entries expire after ``mac_ttl`` seconds of inactivity.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, mac_ttl: int = MAC_DEFAULT_TTL_SECONDS) -> None:
         self.stats = {1: PortStatistics(), 2: PortStatistics()}
-        self.mac_table: Dict[str, int] = {}
+        self.mac_table: Dict[str, MacEntry] = {}
+        self.mac_ttl = mac_ttl
         self._lock = Lock()
         self._bridge_stop = Event()
         self._bridge_thread: Thread | None = None
         self._bridge_sockets: Dict[int, socket.socket] = {}
         self._bridge_ifaces: Dict[int, str] = {}
+        self._expiry_thread = Thread(target=self._expiry_loop, daemon=True)
+        self._expiry_thread.start()
+
+    def _expiry_loop(self) -> None:
+        while not self._bridge_stop.is_set():
+            self._bridge_stop.wait(timeout=MAC_EXPIRY_CHECK_INTERVAL_SECONDS)
+            self._purge_expired_entries()
+
+    def _purge_expired_entries(self) -> None:
+        with self._lock:
+            expired = [mac for mac, entry in self.mac_table.items() if entry.is_expired(self.mac_ttl)]
+            for mac in expired:
+                del self.mac_table[mac]
 
     @staticmethod
     def _mac(raw: bytes) -> str:
@@ -101,11 +134,17 @@ class SoftwareSwitch:
 
             dst_mac = self._mac(frame[0:6])
             src_mac = self._mac(frame[6:12])
-            out_port = self.mac_table.get(dst_mac)
+            dst_entry = self.mac_table.get(dst_mac)
+            out_port = dst_entry.port if dst_entry is not None else None
             if out_port == in_port or out_port not in (1, 2):
                 out_port = 2 if in_port == 1 else 1
 
-            self.mac_table[src_mac] = in_port
+            existing = self.mac_table.get(src_mac)
+            if existing is not None:
+                existing.port = in_port
+                existing.last_seen = time.monotonic()
+            else:
+                self.mac_table[src_mac] = MacEntry(port=in_port)
 
             protocols = self._detect_protocols(frame)
             in_stats = self.stats[in_port]
@@ -130,6 +169,24 @@ class SoftwareSwitch:
         with self._lock:
             for port in self.stats.values():
                 port.reset()
+
+    def clear_mac_table(self) -> None:
+        with self._lock:
+            self.mac_table.clear()
+
+    def set_mac_ttl(self, ttl: int) -> None:
+        if ttl <= 0:
+            raise ValueError("MAC TTL must be a positive integer")
+        with self._lock:
+            self.mac_ttl = ttl
+
+    def mac_table_snapshot(self) -> list[tuple[str, int, float]]:
+        """Return a sorted list of (mac, port, lifetime_remaining_seconds)."""
+        with self._lock:
+            return sorted(
+                (mac, entry.port, entry.lifetime_remaining(self.mac_ttl))
+                for mac, entry in self.mac_table.items()
+            )
 
     @staticmethod
     def available_interfaces() -> list[str]:
