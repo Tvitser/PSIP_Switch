@@ -230,13 +230,6 @@ public class SwitchTests : IDisposable
     public void PurgeExpiredEntries_RemovesStaleMacs()
     {
         _sw.ProcessFrame(1, TcpHttpFrame());
-        // Force entry to appear expired
-        foreach (var (mac, port, _) in _sw.MacTableSnapshot())
-        {
-            // Access internal entry via the public snapshot to find the MAC,
-            // then age it out by setting TTL to 1 and sleeping slightly.
-            _ = mac; _ = port;
-        }
         _sw.SetMacTtl(1);
         System.Threading.Thread.Sleep(1100);
         _sw.PurgeExpiredEntries();

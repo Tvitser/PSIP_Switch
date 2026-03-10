@@ -136,7 +136,6 @@ public sealed class RawSocketBridge : IDisposable
         if (fd < 0) return;
 
         int addrLen = Marshal.SizeOf<SockAddrLl>();
-        srcAddr.SllAddr ??= new byte[8];
         int n = NativeRecvFrom(fd, buf, buf.Length, 0, ref srcAddr, ref addrLen);
         if (n <= 0) return;
 
