@@ -1,92 +1,27 @@
-using System.Net.NetworkInformation;
-using System.Runtime.InteropServices;
+using SharpPcap;
 
 namespace SoftwareSwitch;
 
 /// <summary>
-/// Captures and sends raw Ethernet frames on Linux using AF_PACKET sockets
-/// via P/Invoke.  Two network interfaces are bound as port 1 and port 2 of
-/// the switch and frames are forwarded between them by <see cref="Switch"/>.
+/// Captures and sends raw Ethernet frames using SharpPcap (cross-platform, no P/Invoke).
+/// Two network interfaces are bound as port 1 and port 2 of the switch and frames are
+/// forwarded between them by <see cref="Switch"/>.
+/// Requires libpcap (Linux/macOS) or Npcap (Windows) to be installed, and the process
+/// to have the necessary permissions (CAP_NET_RAW on Linux, or run as root/Administrator).
 /// </summary>
 public sealed class RawSocketBridge : IDisposable
 {
-    // AF_PACKET = 17, SOCK_RAW = 3, ETH_P_ALL = 0x0003 (network byte order = 0x0300)
-    private const int AfPacket = 17;
-    private const int SockRaw = 3;
-    private const int EthPAll = 0x0003;
-    // pkttype == PACKET_OUTGOING (4) means the kernel is telling us about a frame
-    // that we sent; skip it to prevent forwarding loops.
-    private const byte PacketOutgoing = 4;
-    // MSG_DONTWAIT makes recvfrom return EAGAIN instead of blocking when there is no data.
-    private const int MsgDontwait = 0x40;
-
-    // DLL name used in all DllImport attributes.  The static constructor registers
-    // a resolver that tries versioned names (libc.so.6) first so the bridge works
-    // on distributions where the unversioned "libc" symlink is absent.
-    private const string LibcDll = "libc";
-
-    static RawSocketBridge()
-    {
-        NativeLibrary.SetDllImportResolver(
-            typeof(RawSocketBridge).Assembly,
-            static (name, _, _) =>
-            {
-                if (name != LibcDll) return IntPtr.Zero;
-                // Try common libc names across Linux distributions in preferred order.
-                // libc.so.6  – standard glibc on Debian/Ubuntu/Fedora/RHEL
-                // libc.so    – may exist as a symlink on some systems
-                // libc       – fallback; .NET may resolve it via the OS loader
-                // libSystem.B.dylib – macOS (socket functions exist but AF_PACKET does not)
-                foreach (var candidate in new[] { "libc.so.6", "libc.musl-x86_64.so.1",
-                                                  "libc.musl-aarch64.so.1", "libc.so", "libc" })
-                {
-                    if (NativeLibrary.TryLoad(candidate, out IntPtr handle))
-                        return handle;
-                }
-                return IntPtr.Zero;
-            });
-    }
-
-    [DllImport(LibcDll, SetLastError = true, EntryPoint = "socket")]
-    private static extern int NativeSocket(int domain, int type, int protocol);
-
-    [DllImport(LibcDll, SetLastError = true, EntryPoint = "bind")]
-    private static extern int NativeBind(int sockfd, ref SockAddrLl addr, int addrlen);
-
-    [DllImport(LibcDll, SetLastError = true, EntryPoint = "recvfrom")]
-    private static extern int NativeRecvFrom(int sockfd, byte[] buf, int len, int flags,
-        ref SockAddrLl src_addr, ref int addrlen);
-
-    [DllImport(LibcDll, SetLastError = true, EntryPoint = "send")]
-    private static extern int NativeSend(int sockfd, byte[] buf, int len, int flags);
-
-    [DllImport(LibcDll, SetLastError = true, EntryPoint = "close")]
-    private static extern int NativeClose(int fd);
-
-    [DllImport(LibcDll, SetLastError = true, EntryPoint = "if_nametoindex")]
-    private static extern uint NativeIfNameToIndex([MarshalAs(UnmanagedType.LPStr)] string ifname);
-
-    // sockaddr_ll – Linux low-level socket address for AF_PACKET
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SockAddrLl
-    {
-        public ushort SllFamily;
-        public ushort SllProtocol;
-        public int SllIfindex;
-        public ushort SllHatype;
-        public byte SllPkttype;
-        public byte SllHalen;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
-        public byte[] SllAddr;
-    }
-
     private readonly Switch _switch;
-    private int _fd1 = -1;
-    private int _fd2 = -1;
+    private ILiveDevice? _dev1;
+    private ILiveDevice? _dev2;
     private string? _iface1;
     private string? _iface2;
-    private Thread? _thread;
     private volatile bool _running;
+
+    // Stored so handlers can be unregistered in Stop() to avoid duplicate registrations
+    // if Start() is called again after Stop().
+    private PacketArrivalEventHandler? _handler1;
+    private PacketArrivalEventHandler? _handler2;
 
     public bool IsRunning => _running;
     public string? Port1Interface => _iface1;
@@ -101,7 +36,7 @@ public sealed class RawSocketBridge : IDisposable
     // Public API
     // -------------------------------------------------------------------------
 
-    /// <summary>Opens AF_PACKET sockets and starts the capture thread.</summary>
+    /// <summary>Opens pcap devices and starts capture on both interfaces.</summary>
     public void Start(string iface1, string iface2)
     {
         if (_running)
@@ -111,126 +46,133 @@ public sealed class RawSocketBridge : IDisposable
         if (string.Equals(iface1, iface2, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Interfaces for port 1 and port 2 must be different.");
 
-        _fd1 = OpenSocket(iface1);
+        _dev1 = OpenDevice(iface1);
         try
         {
-            _fd2 = OpenSocket(iface2);
+            _dev2 = OpenDevice(iface2);
         }
         catch
         {
-            NativeClose(_fd1);
-            _fd1 = -1;
+            _dev1.Close();
+            _dev1 = null;
             throw;
         }
 
         _iface1 = iface1;
         _iface2 = iface2;
         _running = true;
-        _thread = new Thread(CaptureLoop) { IsBackground = true, Name = "BridgeCaptureLoop" };
-        _thread.Start();
+
+        _handler1 = (_, e) => OnPacket(e, inPort: 1);
+        _handler2 = (_, e) => OnPacket(e, inPort: 2);
+        _dev1.OnPacketArrival += _handler1;
+        _dev2.OnPacketArrival += _handler2;
+
+        _dev1.StartCapture();
+        _dev2.StartCapture();
     }
 
-    /// <summary>Stops the capture thread and closes sockets.</summary>
+    /// <summary>Stops capture and closes the pcap devices.</summary>
     public void Stop()
     {
         _running = false;
-        // Close sockets first so that any in-flight recvfrom returns EBADF immediately,
-        // allowing the capture thread to observe _running == false and exit cleanly.
-        if (_fd1 != -1) { NativeClose(_fd1); _fd1 = -1; }
-        if (_fd2 != -1) { NativeClose(_fd2); _fd2 = -1; }
-        _thread?.Join(TimeSpan.FromSeconds(2));
-        _thread = null;
+        CloseDevice(ref _dev1, _handler1);
+        CloseDevice(ref _dev2, _handler2);
+        _handler1 = null;
+        _handler2 = null;
         _iface1 = null;
         _iface2 = null;
     }
 
-    // -------------------------------------------------------------------------
-    // Internal capture loop
-    // -------------------------------------------------------------------------
-
-    private void CaptureLoop()
+    private static void CloseDevice(ref ILiveDevice? dev, PacketArrivalEventHandler? handler)
     {
-        byte[] buf = new byte[65535];
-        var srcAddr = new SockAddrLl { SllAddr = new byte[8] };
-
-        while (_running)
-        {
-            // Poll port 1
-            TryReceive(_fd1, 1, buf, ref srcAddr);
-            // Poll port 2
-            TryReceive(_fd2, 2, buf, ref srcAddr);
-
-            // Yield briefly when both sockets had no data to avoid burning CPU
-            // in a tight spin loop while _running is still true.
-            Thread.Sleep(1);
-        }
+        if (dev == null) return;
+        if (handler != null)
+            dev.OnPacketArrival -= handler;
+        try { dev.StopCapture(); } catch { }
+        dev.Close();
+        dev = null;
     }
 
-    private void TryReceive(int fd, int inPort, byte[] buf, ref SockAddrLl srcAddr)
+    // -------------------------------------------------------------------------
+    // Packet handler
+    // -------------------------------------------------------------------------
+
+    // Switch.ProcessFrame is internally synchronized with a lock, so concurrent
+    // invocations from the two device capture threads are safe.
+    private void OnPacket(PacketCapture e, int inPort)
     {
-        if (fd < 0) return;
+        if (!_running) return;
 
-        int addrLen = Marshal.SizeOf<SockAddrLl>();
-        // MSG_DONTWAIT: return immediately if no packet is available (EAGAIN/EWOULDBLOCK).
-        int n = NativeRecvFrom(fd, buf, buf.Length, MsgDontwait, ref srcAddr, ref addrLen);
-        if (n <= 0) return;
+        // Copy from the ref struct's ReadOnlySpan<byte> into an array for Switch.ProcessFrame.
+        byte[] frame = e.Data.ToArray();
+        if (frame.Length < 14) return;
 
-        // Skip frames the kernel reports as PACKET_OUTGOING to prevent loops
-        if (srcAddr.SllPkttype == PacketOutgoing) return;
-
-        byte[] frame = buf[..n];
         try
         {
             var result = _switch.ProcessFrame(inPort, frame);
-            int outFd = result.OutPort == 1 ? _fd1 : _fd2;
-            if (outFd >= 0)
-                NativeSend(outFd, result.Frame, result.Frame.Length, 0);
+            var outDev = result.OutPort == 1 ? _dev1 : _dev2;
+            outDev?.SendPacket(result.Frame);
         }
         catch (ArgumentException)
         {
-            // Frame too short or invalid; discard
+            // Frame too short or malformed; discard.
         }
     }
 
     // -------------------------------------------------------------------------
-    // Socket helpers
+    // Device helpers
     // -------------------------------------------------------------------------
 
-    private static int OpenSocket(string iface)
+    private static ILiveDevice OpenDevice(string name)
     {
-        // htons(ETH_P_ALL) = 0x0300
-        int fd = NativeSocket(AfPacket, SockRaw, (int)System.Net.IPAddress.HostToNetworkOrder((short)EthPAll) & 0xFFFF);
-        if (fd < 0)
+        CaptureDeviceList devices;
+        try
         {
-            int err = Marshal.GetLastSystemError();
+            devices = CaptureDeviceList.New();
+        }
+        catch (Exception ex)
+        {
             throw new InvalidOperationException(
-                $"socket(AF_PACKET, SOCK_RAW, ETH_P_ALL) failed with errno {err}. " +
-                "Ensure the process has CAP_NET_RAW or is run as root.");
+                "Cannot enumerate capture devices. Ensure libpcap/Npcap is installed and " +
+                "the process has the required permissions (CAP_NET_RAW or root).", ex);
         }
 
-        uint ifindex = NativeIfNameToIndex(iface);
-        if (ifindex == 0)
-        {
-            NativeClose(fd);
-            throw new InvalidOperationException($"Interface '{iface}' not found.");
-        }
+        var dev = devices.FirstOrDefault(d =>
+            string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
 
-        var addr = new SockAddrLl
+        if (dev == null)
+            throw new InvalidOperationException(
+                $"Interface '{name}' not found. " +
+                $"Available: {string.Join(", ", devices.Select(d => d.Name))}");
+
+        // Use a ConfigurationFailed handler so that options unsupported on the current
+        // platform (e.g. NoCaptureLocal on some Linux libpcap versions) are skipped
+        // instead of throwing.
+        var config = new DeviceConfiguration
         {
-            SllFamily = AfPacket,
-            SllProtocol = (ushort)((int)System.Net.IPAddress.HostToNetworkOrder((short)EthPAll) & 0xFFFF),
-            SllIfindex = (int)ifindex,
-            SllAddr = new byte[8],
+            Mode = DeviceModes.Promiscuous | DeviceModes.NoCaptureLocal,
+            ReadTimeout = 250,
         };
+        config.ConfigurationFailed += static (_, _) => { /* ignore unsupported options */ };
 
-        if (NativeBind(fd, ref addr, Marshal.SizeOf<SockAddrLl>()) < 0)
+        dev.Open(config);
+        return dev;
+    }
+
+    /// <summary>Returns all pcap-visible device names, or an empty list if libpcap is unavailable.</summary>
+    public static IReadOnlyList<string> AvailableDeviceNames()
+    {
+        try
         {
-            int err = Marshal.GetLastSystemError();
-            NativeClose(fd);
-            throw new InvalidOperationException($"bind() on '{iface}' failed with errno {err}.");
+            return CaptureDeviceList.New()
+                .Select(d => d.Name)
+                .OrderBy(n => n)
+                .ToList();
         }
-
-        return fd;
+        catch
+        {
+            return [];
+        }
     }
 
     public void Dispose() => Stop();

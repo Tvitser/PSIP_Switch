@@ -159,7 +159,7 @@ public sealed class WebGui : IDisposable
             : string.Empty;
 
         var ifaceOptions = new StringBuilder();
-        foreach (var iface in Switch.AvailableInterfaces())
+        foreach (var iface in RawSocketBridge.AvailableDeviceNames())
             ifaceOptions.Append($"<option value='{HE(iface)}'>{HE(iface)}</option>");
         if (ifaceOptions.Length == 0)
             ifaceOptions.Append("<option value=''>No interfaces found</option>");
