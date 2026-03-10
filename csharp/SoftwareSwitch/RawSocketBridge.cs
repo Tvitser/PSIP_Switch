@@ -17,24 +17,53 @@ public sealed class RawSocketBridge : IDisposable
     // pkttype == PACKET_OUTGOING (4) means the kernel is telling us about a frame
     // that we sent; skip it to prevent forwarding loops.
     private const byte PacketOutgoing = 4;
+    // MSG_DONTWAIT makes recvfrom return EAGAIN instead of blocking when there is no data.
+    private const int MsgDontwait = 0x40;
 
-    [DllImport("libc", SetLastError = true, EntryPoint = "socket")]
+    // DLL name used in all DllImport attributes.  The static constructor registers
+    // a resolver that tries versioned names (libc.so.6) first so the bridge works
+    // on distributions where the unversioned "libc" symlink is absent.
+    private const string LibcDll = "libc";
+
+    static RawSocketBridge()
+    {
+        NativeLibrary.SetDllImportResolver(
+            typeof(RawSocketBridge).Assembly,
+            static (name, _, _) =>
+            {
+                if (name != LibcDll) return IntPtr.Zero;
+                // Try common libc names across Linux distributions in preferred order.
+                // libc.so.6  – standard glibc on Debian/Ubuntu/Fedora/RHEL
+                // libc.so    – may exist as a symlink on some systems
+                // libc       – fallback; .NET may resolve it via the OS loader
+                // libSystem.B.dylib – macOS (socket functions exist but AF_PACKET does not)
+                foreach (var candidate in new[] { "libc.so.6", "libc.musl-x86_64.so.1",
+                                                  "libc.musl-aarch64.so.1", "libc.so", "libc" })
+                {
+                    if (NativeLibrary.TryLoad(candidate, out IntPtr handle))
+                        return handle;
+                }
+                return IntPtr.Zero;
+            });
+    }
+
+    [DllImport(LibcDll, SetLastError = true, EntryPoint = "socket")]
     private static extern int NativeSocket(int domain, int type, int protocol);
 
-    [DllImport("libc", SetLastError = true, EntryPoint = "bind")]
+    [DllImport(LibcDll, SetLastError = true, EntryPoint = "bind")]
     private static extern int NativeBind(int sockfd, ref SockAddrLl addr, int addrlen);
 
-    [DllImport("libc", SetLastError = true, EntryPoint = "recvfrom")]
+    [DllImport(LibcDll, SetLastError = true, EntryPoint = "recvfrom")]
     private static extern int NativeRecvFrom(int sockfd, byte[] buf, int len, int flags,
         ref SockAddrLl src_addr, ref int addrlen);
 
-    [DllImport("libc", SetLastError = true, EntryPoint = "send")]
+    [DllImport(LibcDll, SetLastError = true, EntryPoint = "send")]
     private static extern int NativeSend(int sockfd, byte[] buf, int len, int flags);
 
-    [DllImport("libc", SetLastError = true, EntryPoint = "close")]
+    [DllImport(LibcDll, SetLastError = true, EntryPoint = "close")]
     private static extern int NativeClose(int fd);
 
-    [DllImport("libc", SetLastError = true, EntryPoint = "if_nametoindex")]
+    [DllImport(LibcDll, SetLastError = true, EntryPoint = "if_nametoindex")]
     private static extern uint NativeIfNameToIndex([MarshalAs(UnmanagedType.LPStr)] string ifname);
 
     // sockaddr_ll – Linux low-level socket address for AF_PACKET
@@ -105,6 +134,8 @@ public sealed class RawSocketBridge : IDisposable
     public void Stop()
     {
         _running = false;
+        // Close sockets first so that any in-flight recvfrom returns EBADF immediately,
+        // allowing the capture thread to observe _running == false and exit cleanly.
         if (_fd1 != -1) { NativeClose(_fd1); _fd1 = -1; }
         if (_fd2 != -1) { NativeClose(_fd2); _fd2 = -1; }
         _thread?.Join(TimeSpan.FromSeconds(2));
@@ -128,6 +159,10 @@ public sealed class RawSocketBridge : IDisposable
             TryReceive(_fd1, 1, buf, ref srcAddr);
             // Poll port 2
             TryReceive(_fd2, 2, buf, ref srcAddr);
+
+            // Yield briefly when both sockets had no data to avoid burning CPU
+            // in a tight spin loop while _running is still true.
+            Thread.Sleep(1);
         }
     }
 
@@ -136,7 +171,8 @@ public sealed class RawSocketBridge : IDisposable
         if (fd < 0) return;
 
         int addrLen = Marshal.SizeOf<SockAddrLl>();
-        int n = NativeRecvFrom(fd, buf, buf.Length, 0, ref srcAddr, ref addrLen);
+        // MSG_DONTWAIT: return immediately if no packet is available (EAGAIN/EWOULDBLOCK).
+        int n = NativeRecvFrom(fd, buf, buf.Length, MsgDontwait, ref srcAddr, ref addrLen);
         if (n <= 0) return;
 
         // Skip frames the kernel reports as PACKET_OUTGOING to prevent loops
