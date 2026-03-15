@@ -184,14 +184,14 @@ The system consists of four cooperating components (Figure~\ref{fig:arch}).
         above=1.0cm of mactbl.north east, anchor=south]
         (gui) {Web GUI (HttpListener)};
 
-  % Arrows
-  \draw[darr] (nic1.north) -- ++(0,0.62);
-  \draw[darr] (nic2.north) -- ++(0,0.62);
+  % Arrows – proper anchor-to-anchor connections
+  \draw[darr] (nic1.north) -- (nic1.north |- pcap.south);
+  \draw[darr] (nic2.north) -- (nic2.north |- pcap.south);
   \draw[arr]  (pcap) -- (core);
   \draw[arr]  (core.north -| mactbl) -- (mactbl.south);
   \draw[arr]  (core.north -| stats)  -- (stats.south);
-  \draw[arr]  (mactbl.north) |- (gui.west);
-  \draw[arr]  (stats.north)  |- (gui.east);
+  \draw[arr,rounded corners=6pt]  (mactbl.north) |- (gui.south west);
+  \draw[arr,rounded corners=6pt]  (stats.north)  |- (gui.south east);
 
 \end{tikzpicture}
 \caption{High-level component diagram of the software switch.}
@@ -275,7 +275,7 @@ checked before the frame is actually transmitted.
 \begin{figure}[H]
 \centering
 \begin{tikzpicture}[
-    node distance = 0.82cm and 4.4cm,
+    node distance = 0.82cm and 4.0cm,
     every node/.style = {font=\small}
   ]
 
@@ -323,9 +323,35 @@ checked before the frame is actually transmitted.
   \draw[arr] (outacl) -- node[lbl,above]{deny} (disc3);
 
   %% -------- Merge right-side paths into pmerge --------
-  \draw[arr] (fbcast.south) -| (pmerge.east);
-  \draw[arr] (funk.south)   -| (pmerge.east);
-  \draw[arr] (flip.south)   -| (pmerge.east);
+  %% Each path exits the box on the RIGHT (.east), routes through a
+  %% staggered vertical channel that is clear of all other boxes, then
+  %% turns LEFT into pmerge at a distinct height.  Rounded corners
+  %% give smooth, natural-looking turns.
+
+  % Channel top coordinates (staggered x-offsets, clear of boxes)
+  \coordinate (ch1t) at ([xshift=0.8cm]fbcast.east);
+  \coordinate (ch2t) at ([xshift=0.5cm]funk.east);
+  \coordinate (ch3t) at ([xshift=0.3cm]flip.east);
+
+  % Entry points on pmerge's right side (staggered y)
+  \coordinate (e1) at ([yshift=3mm]pmerge.east);
+  \coordinate (e2) at (pmerge.east);
+  \coordinate (e3) at ([yshift=-3mm]pmerge.east);
+
+  % Channel bottom coordinates (same x as top, same y as entry)
+  \coordinate (ch1b) at (ch1t |- e1);
+  \coordinate (ch2b) at (ch2t |- e2);
+  \coordinate (ch3b) at (ch3t |- e3);
+
+  % BROADCAST: outermost channel
+  \draw[arr,rounded corners=8pt]
+    (fbcast.east) -- (ch1t) -- (ch1b) -- (e1);
+  % UNKNOWN UNICAST: middle channel
+  \draw[arr,rounded corners=8pt]
+    (funk.east) -- (ch2t) -- (ch2b) -- (e2);
+  % Same-port guard: innermost channel
+  \draw[arr,rounded corners=8pt]
+    (flip.east) -- (ch3t) -- (ch3b) -- (e3);
 
 \end{tikzpicture}
 \caption{Complete frame processing pipeline: IN ACL filter, MAC learning,
@@ -465,8 +491,8 @@ processing pipeline.
   \draw[arr] (inacl)  -- node[lbl,right]{permit} (learn);
   \draw[arr] (learn)  -- (outacl);
   \draw[arr] (outacl) -- node[lbl,right]{permit} (tx);
-  \draw[arr] (inacl)  -- node[lbl,above]{deny}   (drop1);
-  \draw[arr] (outacl) -- node[lbl,above]{deny}   (drop2);
+  \draw[arr,rounded corners=5pt] (inacl)  -- node[lbl,above]{deny}   (drop1);
+  \draw[arr,rounded corners=5pt] (outacl) -- node[lbl,above]{deny}   (drop2);
 
 \end{tikzpicture}
 \caption{IN-direction and OUT-direction ACL filter positions in the pipeline.}
@@ -688,12 +714,12 @@ Figure~\ref{fig:cable} illustrates the convergence timeline.
   \node[info,  below=of s2] (s3) {MAC table updated: A $\to$ Port~2};
   \node[event, below=0.8cm of s3] (t2) {$t_2$: Switch converged (one frame)};
 
-  \draw[arr]        (t0) -- (s0);
-  \draw[arr,dashed] (s0) -- (t1);
-  \draw[arr]        (t1) -- (s1);
-  \draw[arr]        (s1) -- (s2);
-  \draw[arr]        (s2) -- (s3);
-  \draw[arr,dashed] (s3) -- (t2);
+  \draw[arr]                   (t0) -- (s0);
+  \draw[arr,densely dashed]    (s0) -- (t1);
+  \draw[arr]                   (t1) -- (s1);
+  \draw[arr]                   (s1) -- (s2);
+  \draw[arr]                   (s2) -- (s3);
+  \draw[arr,densely dashed]    (s3) -- (t2);
 
 \end{tikzpicture}
 \caption{Convergence timeline after a cable swap with immediate link-down flush.}
